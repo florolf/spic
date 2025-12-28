@@ -361,6 +361,7 @@ def do_proof(args):
     print(f'Minimum cosignature set: {needed_cosignatures}')
 
     last_ts = 0
+    out.extend(bare.pack_uint(len(needed_cosignatures)))
     for idx in sorted(cosignatures, key=lambda idx: cosignatures[idx]['ts']):
         if idx not in needed_cosignatures:
             continue
