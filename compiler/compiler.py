@@ -379,6 +379,38 @@ def do_proof(args):
         f.write(out)
 
 
+def do_dump_proof(args):
+    proof = bytearray(args.input.read_bytes())
+
+    print(f'Leaf signature key index: {bare.unpack_uint(proof)}')
+    bare.unpack_fixed(proof, 64)
+
+    print()
+
+    print(f'Tree size: {bare.unpack_uint(proof)}')
+    print(f'Leaf index: {bare.unpack_uint(proof)}')
+
+    count = bare.unpack_uint(proof)
+    print(f'Inclusion proof ({count} steps):')
+    for _ in range(0, count):
+        print(f' - {bare.unpack_fixed(proof, 32).hex()}')
+
+    print()
+    print(f'Log signature key index: {bare.unpack_uint(proof)}')
+    bare.unpack_fixed(proof, 64)
+
+    timestamp = 0
+    count = bare.unpack_uint(proof)
+    print(f'Cosignatures ({count}):')
+    for _ in range(0, count):
+        ts_delta = bare.unpack_uint(proof)
+        key_idx = bare.unpack_uint(proof)
+        bare.unpack_fixed(proof, 64)
+
+        timestamp += ts_delta
+        print(f' - key {key_idx}, timestamp {timestamp}')
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="sigsum-nano")
 
@@ -397,6 +429,9 @@ def build_parser():
     subparser.add_argument("proof", type=Path)
     subparser.add_argument("output", type=Path)
 
+    subparser = subparsers.add_parser("dump-proof", help="Dump a proof")
+    subparser.add_argument("input", type=Path)
+
     return parser
 
 def main():
@@ -409,6 +444,8 @@ def main():
             do_dump_policy(args)
         case 'proof':
             do_proof(args)
+        case 'dump-proof':
+            do_dump_proof(args)
 
 if __name__ == "__main__":
     main()
