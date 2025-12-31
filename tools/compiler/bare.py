@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Florian Larysch <fl@n621.de>
+#
+# SPDX-License-Identifier: BSD-2-Clause-Patent OR CC0-1.0
+
 def pack_uint(val: int) -> bytes:
     assert val >= 0
 

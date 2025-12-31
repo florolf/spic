@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+# SPDX-FileCopyrightText: 2025 Florian Larysch <fl@n621.de>
+#
+# SPDX-License-Identifier: BSD-2-Clause-Patent OR CC0-1.0
+
 """
 Make up a synthetic Sigsum proof
 
@@ -82,9 +86,6 @@ def cosign_root(key: SigningKey, timestamp: int, checkpoint: str) -> bytes:
 
 def make_inclusion_proof(leaf: bytes, leaf_index: int, tree_size: int) -> tuple[list[bytes], bytes]:
     leaf_hash = sha256(b'\x00' + leaf)
-
-    if tree_size == 1:
-        return [], leaf_hash
 
     fn = leaf_index
     sn = tree_size - 1

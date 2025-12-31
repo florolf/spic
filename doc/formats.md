@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 Florian Larysch <fl@n621.de>
+
+SPDX-License-Identifier: BSD-2-Clause-Patent OR CC0-1.0
+-->
+
 # Introduction
 
 This document describes size-optimized compiled versions of the Sigsum policy and proof formats meant for consumption in a very resource-constrained environment. (see [example.md](example.md) for example output)

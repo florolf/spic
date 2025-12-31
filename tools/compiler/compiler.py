@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+# SPDX-FileCopyrightText: 2025 Florian Larysch <fl@n621.de>
+#
+# SPDX-License-Identifier: BSD-2-Clause-Patent OR CC0-1.0
+
 import argparse
 import sys
 import typing
@@ -245,7 +249,6 @@ def do_policy(args):
 
         bc.extend(gbc)
 
-    print(bc.hex(), len(bc))
     out.extend(bare.pack_uint(len(bc)))
     out.extend(bc)
 
@@ -313,15 +316,26 @@ def do_proof(args):
     out.extend(bytes.fromhex(proof['leaf'][0][1]))
 
     # tree_size
-    out.extend(bare.pack_uint(int(proof['size'][0][0])))
+    tree_size = int(proof['size'][0][0])
+    out.extend(bare.pack_uint(tree_size))
 
     # leaf_index
-    out.extend(bare.pack_uint(int(proof['leaf_index'][0][0])))
+    if 'leaf_index' in proof:
+        out.extend(bare.pack_uint(int(proof['leaf_index'][0][0])))
 
-    # inclusion_proof
-    out.extend(bare.pack_uint(len(proof['node_hash'])))
-    for h in proof['node_hash']:
-        out.extend(bytes.fromhex(h[0]))
+        # inclusion_proof
+        out.extend(bare.pack_uint(len(proof['node_hash'])))
+        for h in proof['node_hash']:
+            out.extend(bytes.fromhex(h[0]))
+    else:
+        # when the tree has a single entry, the whole inclusion proof section
+        # will be missing
+
+        if tree_size != 1:
+            raise ValueError(f'when no leaf_index exists in proof, tree_size must be 1 but is {tree_size}')
+
+        out.extend(bare.pack_uint(0))
+        out.extend(bare.pack_uint(0))
 
     # root_signature
     root_key_index = find_key_index(policy['logs'], bytes.fromhex(proof['log'][0][0]))
@@ -343,6 +357,7 @@ def do_proof(args):
             'signature': bytes.fromhex(signature)
         }
 
+    # FIXME: nondeterministic
     all_cosignatures = set(cosignatures.keys())
     needed_cosignatures = None
     for i in range(1, len(cosignatures)+1):
@@ -425,7 +440,7 @@ def build_parser():
 
     subparser = subparsers.add_parser("proof", help="Compile a proof")
     subparser.add_argument("policy", type=Path)
-    subparser.add_argument("--leaf_key", type=int)
+    subparser.add_argument("--leaf-key", type=int)
     subparser.add_argument("proof", type=Path)
     subparser.add_argument("output", type=Path)
 
