@@ -216,18 +216,13 @@ static enum spic_result walk_inclusion_proof(struct bare_buf *proof, uint8_t *sc
 		if (sn == 0)
 			return SPIC_INVALID_INCLUSION_PROOF;
 
-		checked(bare_read_exact(proof, &scratch[32], 32), SPIC_ENCODING_ERROR);
-
-		uint8_t one[1];
-		one[0] = 1;
-		spic_sha256_reset();
-		spic_sha256_update(one, 1);
+		uint8_t *p;
 
 		/* b. If LSB(fn) is set, or if fn is equal to sn, then: */
 		if ((fn & 1) || (fn == sn)) {
 			/* i. Set r to HASH(0x01 || p || r). */
-			spic_sha256_update(&scratch[32], 32);
-			spic_sha256_update(&scratch[0], 32);
+			p = &scratch[0];
+			checked(bare_read_exact(proof, &scratch[1], 32), SPIC_ENCODING_ERROR);
 
 			/* ii. If LSB(fn) is not set, then right-shift both fn
 			 * and sn equally until either LSB(fn) is set or fn is
@@ -241,11 +236,12 @@ static enum spic_result walk_inclusion_proof(struct bare_buf *proof, uint8_t *sc
 			/* Otherwise: */
 		} else {
 			/* i. Set r to HASH(0x01 || r || p). */
-			spic_sha256_update(&scratch[0], 32);
-			spic_sha256_update(&scratch[32], 32);
+			p = &scratch[32];
+			checked(bare_read_exact(proof, &scratch[65], 32), SPIC_ENCODING_ERROR);
 		}
 
-		spic_sha256_finish(&scratch[0]);
+		*p = 1;
+		spic_sha256(&scratch[33], p, 65);
 
 		/* c. Finally, right-shift both fn and sn one time. */
 		fn >>= 1;
@@ -340,15 +336,15 @@ enum spic_result spic_verify(
 	 * leaf_data), we can also reuse the NUL byte from the domain separator
 	 * in byte 23 here.
 	 *
-	 * Note that this step outputs data (namely the leaf hash) into bytes 0
-	 * to 31 which overrides the data we are consuming for the hash, so
+	 * Note that this step outputs data (namely the leaf hash) into bytes
+	 * 33 to 64 which overrides the data we are consuming for the hash, so
 	 * whatever implementation we use spic_sha256 needs to handle this case
 	 * correctly. However, given how SHA256 implementations usually work
 	 * (absorbing input data into some internal state first), this should
 	 * not be a problem.
 	 */
 
-	spic_sha256(&scratch[0], &scratch[23], 1 + 32 + 64 + 32);
+	spic_sha256(&scratch[33], &scratch[23], 1 + 32 + 64 + 32);
 
 	/*
 	 * Step 2: Calculate and verify the log checkpoint
@@ -359,25 +355,28 @@ enum spic_result spic_verify(
 	 *
 	 * Scratch layout during this step:
 	 *
-	 *   [0..31]  32 bytes: "r" in the inclusion proof verification algorithm
-	 *   [32..63] 32 bytes: "p" in the inclusion proof verification algorithm
+	 *   [33..64] 32 bytes: "r" in the inclusion proof verification algorithm
+	 *
+	 * And depending on whether r corresponds to a right or left sibling
+	 * respectively:
+	 *
+	 *   [0]      1 byte:  the byte "\0x1"
+	 *   [1..32] 32 bytes: "p" in the inclusion proof verification algorithm
+	 *
+	 *   ([0..64] gets hashed)
+	 *
+	 * or
+	 *
+	 *   [32]      1 byte:  the byte "\0x1"
+	 *   [65..96] 32 bytes: "p" in the inclusion proof verification algorithm
+	 *
+	 *   ([32..96] gets hashed)
 	 *
 	 * Note that we start out with "r" already initialized correctly to the
 	 * leaf hash value by the previous step. After this step has finished,
-	 * bytes 0 to 31 will instead contain the root hash implied by the
-	 * inclusion proof, which we will then use to construct and verify the
-	 * checkpoint in the next step.
-	 *
-	 * XXX possible future improvement: If we place the root hash at
-	 * [33..64] we could place the sibling hash before ([1..32] and [0] for
-	 * the \x01 byte) or after ([64..95] and [32] for the \0x01 byte) it
-	 * while processing the inclusion proof. This would remove the only
-	 * place where we actually rely on having a streaming SHA256 API
-	 * available, easing the burden on what the crypto provider needs to
-	 * support.
-	 *
-	 * Note that this would then require a memmove() of the resulting hash
-	 * to make space for the checkpoint construction in the next step.
+	 * bytes 33 to 64 will instead contain the root hash implied by the
+	 * inclusion proof, which we then move to [0..31] and use to construct
+	 * and verify the checkpoint in the next step.
 	 */
 
 	uint64_t tree_size, leaf_index;
@@ -387,6 +386,8 @@ enum spic_result spic_verify(
 	ret = walk_inclusion_proof(&proof, scratch, leaf_index, tree_size);
 	if (ret != SPIC_OK)
 		return ret;
+
+	memmove(&scratch[0], &scratch[33], 32);
 
 	/*
 	 * Step 2.2: Render the checkpoint body
