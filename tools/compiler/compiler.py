@@ -1,23 +1,26 @@
-#!/usr/bin/env python3
-
 # SPDX-FileCopyrightText: 2025 Florian Larysch <fl@n621.de>
 #
 # SPDX-License-Identifier: BSD-2-Clause-Patent OR CC0-1.0
 
-import argparse
-import sys
-import typing
 import itertools
+import hashlib
+import typing
 
-from pathlib import Path
+from collections import defaultdict
+from dataclasses import dataclass
 
-from collections import OrderedDict, defaultdict
-from typing import Optional, Self
+from typing import Self, Optional, Iterable
 
 import bare
-from utils import sha256
 
-def parse_ascii(doc: str) -> dict[str, list[list[str]]]:
+__all__ = ['SigsumProof', 'SpicProof', 'SigsumPolicy', 'SpicPolicy']
+
+
+def _sha256(data: bytes) -> bytes:
+    return hashlib.sha256(data).digest()
+
+
+def _parse_ascii(doc: str) -> dict[str, list[list[str]]]:
     out = defaultdict(list)
 
     for line in doc.splitlines():
@@ -30,41 +33,206 @@ def parse_ascii(doc: str) -> dict[str, list[list[str]]]:
     return out
 
 
-class QuorumPolicy:
-    def __init__(self, entities: OrderedDict[str, bytes|tuple[int, list[str]]], entry_point: Optional[str]):
-        if entry_point is None:
-            self.entities = {'empty': (0, [])}
-            self.entry_point = 'empty'
-            return
+@dataclass(frozen=True)
+class SigsumProof:
+    leaf_sig: tuple[bytes, bytes]
 
-        self.entities = entities
-        self.entry_point = entry_point
+    root_hash: bytes
+    tree_size: int
+    root_sig: tuple[bytes, bytes]
 
-        if type(self.entities[self.entry_point]) is bytes:
-            self.entities['single_witness'] = (1, [self.entry_point])
-            self.entry_point = 'single_witness'
+    cosignatures: list[tuple[int, bytes, bytes]]
+
+    leaf_index: int
+    inclusion_proof: list[bytes]
 
     @classmethod
-    def from_policy(cls, policy: str) -> Self:
-        quorum = None
+    def from_ascii(cls, text: str) -> Self:
+        proof = _parse_ascii(text)
+
+        cosignatures = []
+        for keyhash, timestamp, signature in proof['cosignature']:
+            cosignatures.append((
+                int(timestamp),
+                bytes.fromhex(keyhash),
+                bytes.fromhex(signature)
+            ))
+
+        tree_size = int(proof['size'][0][0])
+        if tree_size == 1:
+            leaf_index = 0
+        else:
+            leaf_index = int(proof['leaf_index'][0][0])
+
+        inclusion_proof = []
+        for node in proof.get('node_hash', []):
+            inclusion_proof.append(bytes.fromhex(node[0]))
+
+        return cls(
+            leaf_sig = (
+                bytes.fromhex(proof['leaf'][0][0]),
+                bytes.fromhex(proof['leaf'][0][1]),
+            ),
+
+            root_hash = bytes.fromhex(proof['root_hash'][0][0]),
+            tree_size = tree_size,
+            root_sig = (
+                bytes.fromhex(proof['log'][0][0]),
+                bytes.fromhex(proof['signature'][0][0]),
+            ),
+
+            cosignatures = cosignatures,
+
+            leaf_index = leaf_index,
+            inclusion_proof = inclusion_proof
+        )
+
+
+@dataclass(frozen=True)
+class SpicProof:
+    leaf_signature: tuple[int, bytes]
+
+    tree_size: int
+    leaf_index: int
+    inclusion_proof: list[bytes]
+
+    root_signature: tuple[int, bytes]
+
+    cosignatures: list[tuple[int, int, bytes]]
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Self:
+        proof = bytearray(data)
+
+        leaf_signature = (
+            bare.unpack_uint(proof),
+            bare.unpack_fixed(proof, 64)
+        )
+
+        tree_size = bare.unpack_uint(proof)
+        leaf_index = bare.unpack_uint(proof)
+
+        inclusion_proof = []
+        for _ in range(0, bare.unpack_uint(proof)):
+            inclusion_proof.append(bare.unpack_fixed(proof, 32))
+
+        root_signature = (
+            bare.unpack_uint(proof),
+            bare.unpack_fixed(proof, 64)
+        )
+
+        cosignatures = []
+        for _ in range(0, bare.unpack_uint(proof)):
+            cosignatures.append((
+                bare.unpack_uint(proof),
+                bare.unpack_uint(proof),
+                bare.unpack_fixed(proof, 64)
+            ))
+
+        return cls(
+            leaf_signature = leaf_signature,
+
+            tree_size = tree_size,
+            leaf_index = leaf_index,
+            inclusion_proof = inclusion_proof,
+
+            root_signature = root_signature,
+
+            cosignatures = cosignatures
+        )
+
+    def to_bytes(self) -> bytes:
+        out = bytearray()
+
+        out.extend(bare.pack_uint(self.leaf_signature[0]))
+        out.extend(self.leaf_signature[1])
+
+        out.extend(bare.pack_uint(self.tree_size))
+        out.extend(bare.pack_uint(self.leaf_index))
+
+        out.extend(bare.pack_uint(len(self.inclusion_proof)))
+        for node in self.inclusion_proof:
+            out.extend(node)
+
+        out.extend(bare.pack_uint(self.root_signature[0]))
+        out.extend(self.root_signature[1])
+
+        out.extend(bare.pack_uint(len(self.cosignatures)))
+        for ts_delta, key_idx, signature in self.cosignatures:
+            out.extend(bare.pack_uint(ts_delta))
+            out.extend(bare.pack_uint(key_idx))
+            out.extend(signature)
+
+        return bytes(out)
+
+    def dump(self, with_sigs: bool = False) -> str:
+        lines = []
+
+        lines.append(f'Leaf signature key index: {self.leaf_signature[0]}')
+        if with_sigs:
+            lines.append(f'Leaf signature: {self.leaf_signature[1].hex()}')
+
+        lines.append('')
+
+        lines.append(f'Tree size: {self.tree_size}')
+        lines.append(f'Leaf index: {self.leaf_index}')
+
+        lines.append(f'Inclusion proof ({len(self.inclusion_proof)} steps):')
+        for node in self.inclusion_proof:
+            lines.append(f' - {node.hex()}')
+
+        lines.append('')
+        lines.append(f'Log signature key index: {self.root_signature[0]}')
+        if with_sigs:
+            lines.append(f'Checkpoint signature: {self.root_signature[1].hex()}')
+
+        lines.append('')
+        lines.append(f'Cosignatures ({len(self.cosignatures)}):')
+
+        timestamp = 0
+        for ts_delta, key_idx, signature in self.cosignatures:
+            timestamp += ts_delta
+            if with_sigs:
+                lines.append(f' - key {key_idx}, timestamp {timestamp}, signature {signature.hex()}')
+            else:
+                lines.append(f' - key {key_idx}, timestamp {timestamp}')
+
+        return '\n'.join(lines)
+
+@dataclass(frozen=True)
+class SigsumPolicy:
+    logs: list[bytes]
+    entities: dict[str, bytes|tuple[int, list[str]]]
+    quorum_entry: Optional[str]
+
+    @classmethod
+    def from_ascii(cls, text: str) -> Self:
+        logs = []
+
+        entry_point = None
+        quorum_seen = False
+
         entities = {}
 
-        for line in policy.splitlines():
+        for line in text.splitlines():
             if line.startswith('#'):
                 continue
 
             match line.split():
-                case ['quorum', entry_point]:
-                    if quorum is not None:
+                case ['log', pubkey, *_]:
+                    logs.append(bytes.fromhex(pubkey))
+
+                case ['quorum', name]:
+                    if quorum_seen:
                         raise ValueError('multiple quorum definitions in policy')
 
-                    if entry_point == 'none':
-                        quorum = cls(entities, None)
-                    else:
-                        if entry_point not in entities:
-                            raise ValueError(f'quorum entry point "{entry_point}" is unknown')
+                    quorum_seen = True
 
-                        quorum = cls(entities, entry_point)
+                    if name != 'none':
+                        if name not in entities:
+                            raise ValueError(f'quorum entry point "{name}" is unknown')
+
+                        entry_point = name
 
                 case ['witness', name, pubkey, *_]:
                     if name == 'none':
@@ -100,367 +268,284 @@ class QuorumPolicy:
 
                     entities[name] = (threshold, members)
 
-        if quorum is None:
+        if not logs:
+            raise ValueError('no logs specified')
+
+        if not quorum_seen:
             raise ValueError('quorum not specified')
 
-        return quorum
+        return cls(
+            logs = logs,
+            entities = entities,
+            quorum_entry = entry_point
+        )
 
-def compile_entity(entities, name, indent=0) -> tuple[list, list]:
-    print(' ' * indent + f"compiling group {name}")
-    threshold, members = entities[name]
+    def compile(self) -> 'SpicPolicy':
+        def compile_group(entities, name) -> tuple[list, list]:
+            threshold, members = entities[name]
 
-    if threshold == 1 and len(members) == 1:
-        return compile_entity(entities, members[0])
+            if threshold == 1 and len(members) == 1 and type(entities[members[0]]) is not bytes:
+                return compile_group(entities, members[0])
 
-    operations = []
-    witnesses = []
-    child_witnesses = []
-    children = 0
+            my_witnesses = []
+            child_operations = []
+            child_witnesses = []
+            n_children = 0
 
-    for member_name in members:
-        member = entities[member_name]
-        if type(member) is bytes:
-            witnesses.append(member_name)
+            for member_name in members:
+                member = entities[member_name]
+                if type(member) is bytes:
+                    my_witnesses.append(member_name)
+                else:
+                    sub_ops, sub_wit = compile_group(entities, member_name)
+                    child_operations.extend(sub_ops)
+                    child_witnesses.extend(sub_wit)
+
+                    n_children += 1
+
+            my_operation = (
+                threshold,
+                n_children,
+                len(my_witnesses),
+            )
+
+            return [*child_operations, my_operation], [*child_witnesses, *my_witnesses]
+
+        if self.quorum_entry is None:
+            entities = {'empty': (0, [])}
+            entry_point = 'empty'
+        elif type(self.entities[self.quorum_entry]) is bytes:
+            entities = self.entities.copy()
+            entities[''] = (1, [self.quorum_entry])
+            entry_point = ''
         else:
-            sub_ops, sub_wit = compile_entity(entities, member_name, indent+4)
-            operations.extend(sub_ops)
-            child_witnesses.extend(sub_wit)
+            entities = self.entities
+            entry_point = self.quorum_entry
 
-            children += 1
+        # sort by keyhash for determinism
+        logs = list(sorted(self.logs))
 
-    operations.append((
-        threshold,
-        children,
-        len(witnesses),
-    ))
+        # TODO: this is nondeterministic / depends on the syntax but not the
+        # underlying structure of the input policy
+        quorum, witnesses = compile_group(entities, entry_point)
+        witness_keys = typing.cast(list[bytes], [self.entities[name] for name in witnesses])
 
-    result = operations, [*child_witnesses, *witnesses]
-    print(' ' * indent + f'-> result({name}): t={threshold} c={children} w({len(witnesses)})={witnesses}')
-    return result
+        return SpicPolicy(
+            logs = logs,
+            witnesses = witness_keys,
+            quorum = quorum
+        )
 
-def load_cpol(raw: bytes):
-    buf = bytearray(raw)
 
-    pol = {
-        'logs': [],
-        'witnesses': [],
-    }
+@dataclass(frozen=True)
+class SpicPolicy:
+    logs: list[bytes]
+    witnesses: list[bytes]
+    quorum: list[tuple[int, int, int]]
 
-    for _ in range(0, bare.unpack_uint(buf)):
-        pol['logs'].append(bare.unpack_fixed(buf, 32))
+    @classmethod
+    def from_bytes(cls, data: bytes) -> Self:
+        buf = bytearray(data)
 
-    for _ in range(0, bare.unpack_uint(buf)):
-        pol['witnesses'].append(bare.unpack_fixed(buf, 32))
+        logs = []
+        for _ in range(0, bare.unpack_uint(buf)):
+            logs.append(bare.unpack_fixed(buf, 32))
 
-    bc = bytearray(bare.unpack_data(buf))
-    quorum = []
+        witnesses = []
+        for _ in range(0, bare.unpack_uint(buf)):
+            witnesses.append(bare.unpack_fixed(buf, 32))
 
-    while bc:
-        start = bare.unpack_uint(bc)
-        children = 0
-        if start & 1:
-            children = bare.unpack_uint(bc)
+        bc = bytearray(bare.unpack_data(buf))
 
-        witnesses = 0
-        if start & 2:
-            witnesses  = bare.unpack_uint(bc)
+        quorum = []
+        while bc:
+            start = bare.unpack_uint(bc)
+            n_children = 0
+            if start & 1:
+                n_children = bare.unpack_uint(bc)
 
-        quorum.append((start >> 2, children, witnesses))
+            n_witnesses = 0
+            if start & 2:
+                n_witnesses  = bare.unpack_uint(bc)
 
-    pol['quorum'] = quorum
+            quorum.append((start >> 2, n_children, n_witnesses))
 
-    if buf:
-        raise ValueError(f'extraneous bytes in policy: {buf.hex()})')
+        if buf:
+            raise ValueError(f'extraneous bytes in policy: {buf.hex()})')
 
-    return pol
+        return cls(
+            logs = logs,
+            witnesses = witnesses,
+            quorum = quorum
+        )
 
-def eval_quorum(operations: list[tuple[int, int, int]], witnesses: set[int]) -> bool:
-    stack = []
+    def to_bytes(self) -> bytes:
+        out = bytearray()
 
-    ww = 0
-    for i in witnesses:
-        ww |= 1 << i
+        out.extend(bare.pack_uint(len(self.logs)))
+        for log in self.logs:
+            out.extend(log)
 
-    for threshold, n_children, n_witnesses in operations:
-        level = 0
+        out.extend(bare.pack_uint(len(self.witnesses)))
+        for witness in self.witnesses:
+            out.extend(witness)
 
-        for _ in range(0, n_children):
-            level += stack.pop()
+        bc = bytearray()
+        for threshold, n_children, n_witnesses in self.quorum:
 
-        for _ in range(0, n_witnesses):
-            if ww & 1:
-                level += 1
+            start_byte = threshold << 2
+            if n_children:
+                start_byte = start_byte | 1
+            if n_witnesses:
+                start_byte = start_byte | 2
 
-            ww >>= 1
+            gbc = bytearray()
+            gbc.extend(bare.pack_uint(start_byte))
 
-        if level >= threshold:
-            stack.append(1)
-        else:
-            stack.append(0)
+            if n_children:
+                gbc.extend(bare.pack_uint(n_children))
 
-    if len(stack) != 1:
-        raise RuntimeError(f'invalid stack size {len(stack)}')
+            if n_witnesses:
+                gbc.extend(bare.pack_uint(n_witnesses))
 
-    return stack[0] == 1
+            bc.extend(gbc)
 
-def do_policy(args):
-    policy = args.input.read_text()
+        out.extend(bare.pack_uint(len(bc)))
+        out.extend(bc)
 
-    logs = []
-    for line in policy.splitlines():
-        if line.startswith('#'):
-            continue
+        return bytes(out)
 
-        match line.split():
-            case ['log', key, _]:
-                logs.append(bytes.fromhex(key))
+    def dump(self) -> str:
+        lines = []
 
-    logs.sort()
+        lines.append('Logs:')
+        for idx, key in enumerate(self.logs):
+            lines.append(f'  {idx}: {key.hex()}')
 
-    quorum = QuorumPolicy.from_policy(policy)
-    groups, wits = compile_entity(quorum.entities, quorum.entry_point)
+        lines.append('')
+        lines.append('Witnesses:')
+        for idx, key in enumerate(self.witnesses):
+            lines.append(f'  {idx}: {key.hex()}')
 
-    out = bytearray()
+        lines.append('')
+        lines.append('Quorum bytecode:')
+        wit_idx = 0
+        stack_size = 0
+        for threshold, children, wits in self.quorum:
+            line = '  '
 
-    out.extend(bare.pack_uint(len(logs)))
-    for log in logs:
-        out.extend(log)
+            if wits:
+                line += f'consume {wits} witnesses ({wit_idx} to {wit_idx + wits - 1}), '
+                wit_idx += wits
 
-    out.extend(bare.pack_uint(len(wits)))
-    for wit in wits:
-        out.extend(typing.cast(bytes, quorum.entities[wit]))
-
-    bc = bytearray()
-    for threshold, children, wits in groups:
-
-        start_byte = threshold << 2
-        if children:
-            start_byte = start_byte | 1
-        if wits:
-            start_byte = start_byte | 2
+            if children:
+                line += f'consume {children} children, '
+                if stack_size < children:
+                    line += '(UNDERFLOWS) '
 
-        gbc = bytearray()
-        gbc.extend(bare.pack_uint(start_byte))
-
-        if children:
-            gbc.extend(bare.pack_uint(children))
-        if wits:
-            gbc.extend(bare.pack_uint(wits))
+                stack_size -= children
 
-        bc.extend(gbc)
-
-    out.extend(bare.pack_uint(len(bc)))
-    out.extend(bc)
-
-    with args.output.open('wb') as f:
-        f.write(out)
-
-def do_dump_policy(args):
-    cpol = args.input.read_bytes()
-    pol = load_cpol(cpol)
-
-    print('Logs:')
-    for idx, key in enumerate(pol['logs']):
-        print(f'  {idx}: {key.hex()}')
-
-    print()
-    print('Witnesses:')
-    for idx, key in enumerate(pol['witnesses']):
-        print(f'  {idx}: {key.hex()}')
-
-    print()
-    print('Quorum bytecode:')
-    wit_idx = 0
-    stack_size = 0
-    for threshold, children, wits in pol['quorum']:
-        print('  ', end='')
-
-        if wits:
-            print(f'consume {wits} witnesses ({wit_idx} to {wit_idx + wits - 1}), ', end='')
-            wit_idx += wits
-
-        if children:
-            print(f'consume {children} children, ', end='')
-            if stack_size < children:
-                print("UNDERFLOW")
-                sys.exit(1)
-
-            stack_size -= children
-
-        stack_size += 1
-        print(f'check threshold >= {threshold} (stack depth: {stack_size})')
-
-    if stack_size != 1:
-        print('invalid stack size at end of program: {stack_size} != 1')
-
-def find_key_index(key_list: list[bytes], keyhash: bytes) -> Optional[int]:
-    for idx, key in enumerate(key_list):
-        cur_kh = sha256(key)
-        if cur_kh == keyhash:
-            return idx
+            stack_size += 1
+            line += f'check threshold >= {threshold} (stack depth: {stack_size})'
+            lines.append(line)
 
-    return None
+        if stack_size != 1:
+            lines.append('invalid stack size at end of program: {stack_size} != 1')
 
-def do_proof(args):
-    policy = load_cpol(args.policy.read_bytes())
-    proof = parse_ascii(args.proof.read_text())
+        return '\n'.join(lines)
 
-    out = bytearray()
+    def _check_quorum(self, witnesses: Iterable[int]) -> bool:
+        stack = []
 
-    # leaf_signature
-    leaf_key_index = 0
-    if args.leaf_key is not None:
-        leaf_key_index = args.leaf_key
+        ww = 0
+        for i in witnesses:
+            ww |= 1 << i
 
-    out.extend(bare.pack_uint(leaf_key_index))
-    out.extend(bytes.fromhex(proof['leaf'][0][1]))
+        for threshold, n_children, n_witnesses in self.quorum:
+            level = 0
 
-    # tree_size
-    tree_size = int(proof['size'][0][0])
-    out.extend(bare.pack_uint(tree_size))
+            for _ in range(0, n_children):
+                level += stack.pop()
 
-    # leaf_index
-    if 'leaf_index' in proof:
-        out.extend(bare.pack_uint(int(proof['leaf_index'][0][0])))
+            for _ in range(0, n_witnesses):
+                if ww & 1:
+                    level += 1
 
-        # inclusion_proof
-        out.extend(bare.pack_uint(len(proof['node_hash'])))
-        for h in proof['node_hash']:
-            out.extend(bytes.fromhex(h[0]))
-    else:
-        # when the tree has a single entry, the whole inclusion proof section
-        # will be missing
+                ww >>= 1
 
-        if tree_size != 1:
-            raise ValueError(f'when no leaf_index exists in proof, tree_size must be 1 but is {tree_size}')
+            if level >= threshold:
+                stack.append(1)
+            else:
+                stack.append(0)
 
-        out.extend(bare.pack_uint(0))
-        out.extend(bare.pack_uint(0))
+        if len(stack) != 1:
+            raise RuntimeError(f'invalid stack size {len(stack)}')
 
-    # root_signature
-    root_key_index = find_key_index(policy['logs'], bytes.fromhex(proof['log'][0][0]))
-    if root_key_index is None:
-        raise ValueError('log key not found in policy')
+        return stack[0] == 1
 
-    out.extend(bare.pack_uint(root_key_index))
-    out.extend(bytes.fromhex(proof['signature'][0][0]))
+    @staticmethod
+    def _sig_to_idx(list_: list[bytes], sig: tuple[bytes, bytes]) -> tuple[int, bytes]:
+        hash_, payload = sig
+        for idx, key in enumerate(list_):
+            if _sha256(key) == hash_:
+                return (idx, payload)
 
-    # cosignatures
-    cosignatures = {}
-    for keyhash, timestamp, signature in proof['cosignature']:
-        idx = find_key_index(policy['witnesses'], bytes.fromhex(keyhash))
-        if idx is None:
-            continue
+        raise KeyError(f'could not find key for hash {hash_.hex()} in policy')
 
-        cosignatures[idx] = {
-            'ts': int(timestamp),
-            'signature': bytes.fromhex(signature)
-        }
+    def _optimize_cosignatures(self, cosignatures: list[tuple[int, int, bytes]]) -> list[tuple[int, int, bytes]]:
+        indexes = [idx for (_, idx, _) in cosignatures]
 
-    # FIXME: nondeterministic
-    all_cosignatures = set(cosignatures.keys())
-    needed_cosignatures = None
-    for i in range(1, len(cosignatures)+1):
-        for combination in itertools.combinations(all_cosignatures, i):
-            if eval_quorum(policy['quorum'], set(combination)):
-                needed_cosignatures = set(combination)
-                break
-        else:
-            continue
+        if self._check_quorum([]):
+            return []
 
-        break
+        needed_cosignatures = None
+        for i in range(1, len(cosignatures)+1):
+            for combination in itertools.combinations(indexes, i):
+                if self._check_quorum(combination):
+                    needed_cosignatures = set(combination)
+                    break
+            else:
+                continue
 
-    if needed_cosignatures is None:
-        raise RuntimeError('could not find satisfying cosignature set')
+            break
 
-    print(f'Minimum cosignature set: {needed_cosignatures}')
+        if needed_cosignatures is None:
+            raise RuntimeError('could not find satisfying cosignature set')
 
-    last_ts = 0
-    out.extend(bare.pack_uint(len(needed_cosignatures)))
-    for idx in sorted(cosignatures, key=lambda idx: cosignatures[idx]['ts']):
-        if idx not in needed_cosignatures:
-            continue
+        return [cs for cs in cosignatures if cs[1] in needed_cosignatures]
 
-        cosig = cosignatures[idx]
+    def _compile_proof(self, proof: SigsumProof, leaf_keys: list[bytes], optimize: bool = True, check_quorum: bool = True) -> SpicProof:
+        cosignatures = []
+        ts_last = 0
 
-        out.extend(bare.pack_uint(cosig['ts'] - last_ts))
-        last_ts = cosig['ts']
+        # sort first by timestamp for delta compression and then by keyhash to define a deterministic order
+        for ts, keyhash, signature in sorted(proof.cosignatures, key=lambda cs: (cs[0], cs[1])):
+            try:
+                sig = self._sig_to_idx(self.witnesses, (keyhash, signature))
+            except KeyError:
+                continue
 
-        out.extend(bare.pack_uint(idx))
-        out.extend(cosig['signature'])
+            cosignatures.append((ts - ts_last, *sig))
+            ts_last = ts
 
+        if optimize:
+            cosignatures = self._optimize_cosignatures(cosignatures)
+        elif check_quorum:
+            if not self._check_quorum(set([cs[1] for cs in cosignatures])):
+                raise RuntimeError("cosignatures don't satisfy quorum")
 
-    with args.output.open('wb') as f:
-        f.write(out)
+        return SpicProof(
+            leaf_signature = self._sig_to_idx(leaf_keys, proof.leaf_sig),
 
+            tree_size = proof.tree_size,
+            leaf_index = proof.leaf_index,
+            root_signature = self._sig_to_idx(self.logs, proof.root_sig),
 
-def do_dump_proof(args):
-    proof = bytearray(args.input.read_bytes())
+            inclusion_proof = proof.inclusion_proof,
 
-    print(f'Leaf signature key index: {bare.unpack_uint(proof)}')
-    bare.unpack_fixed(proof, 64)
+            cosignatures = cosignatures
+        )
 
-    print()
+    def compile_proof(self, proof: SigsumProof, leaf_keys: list[bytes], optimize: bool = True) -> SpicProof:
+        return self._compile_proof(proof, leaf_keys, optimize)
 
-    print(f'Tree size: {bare.unpack_uint(proof)}')
-    print(f'Leaf index: {bare.unpack_uint(proof)}')
-
-    count = bare.unpack_uint(proof)
-    print(f'Inclusion proof ({count} steps):')
-    for _ in range(0, count):
-        print(f' - {bare.unpack_fixed(proof, 32).hex()}')
-
-    print()
-    print(f'Log signature key index: {bare.unpack_uint(proof)}')
-    bare.unpack_fixed(proof, 64)
-
-    timestamp = 0
-    count = bare.unpack_uint(proof)
-    print(f'Cosignatures ({count}):')
-    for _ in range(0, count):
-        ts_delta = bare.unpack_uint(proof)
-        key_idx = bare.unpack_uint(proof)
-        bare.unpack_fixed(proof, 64)
-
-        timestamp += ts_delta
-        print(f' - key {key_idx}, timestamp {timestamp}')
-
-
-def build_parser():
-    parser = argparse.ArgumentParser(prog="sigsum-nano")
-
-    subparsers = parser.add_subparsers(title="subcommands", dest="command", required=True)
-
-    subparser = subparsers.add_parser("policy", help="Compile a policy")
-    subparser.add_argument("input", type=Path)
-    subparser.add_argument("output", type=Path)
-
-    subparser = subparsers.add_parser("dump-policy", help="Dump a policy")
-    subparser.add_argument("input", type=Path)
-
-    subparser = subparsers.add_parser("proof", help="Compile a proof")
-    subparser.add_argument("policy", type=Path)
-    subparser.add_argument("--leaf-key", type=int)
-    subparser.add_argument("proof", type=Path)
-    subparser.add_argument("output", type=Path)
-
-    subparser = subparsers.add_parser("dump-proof", help="Dump a proof")
-    subparser.add_argument("input", type=Path)
-
-    return parser
-
-def main():
-    args = build_parser().parse_args()
-
-    match args.command:
-        case 'policy':
-            do_policy(args)
-        case 'dump-policy':
-            do_dump_policy(args)
-        case 'proof':
-            do_proof(args)
-        case 'dump-proof':
-            do_dump_proof(args)
-
-if __name__ == "__main__":
-    main()
