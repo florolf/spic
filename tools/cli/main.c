@@ -141,7 +141,16 @@ int main(int argc, char **argv)
 	}
 
 	policy = slurp(argv[optind++], &policy_size);
+	if (!policy) {
+		fprintf(stderr, "failed to load policy\n");
+		goto out;
+	}
+
 	proof = slurp(argv[optind++], &proof_size);
+	if (!proof) {
+		fprintf(stderr, "failed to load proof\n");
+		goto out;
+	}
 
 	n_pubkeys = argc - optind;
 	pubkeys = calloc(n_pubkeys, 32);
