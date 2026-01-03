@@ -60,6 +60,7 @@ Some notes:
 TODO:
 
  - Describe a canonical encoding such that semantically identical policies result in the same compiled policy irrespective of ordering/naming in the ASCII format
+ - Technically, tree_size + leaf_index imply the length of the inclusion proof, so we could leave out the length prefix, saving 1 byte (but this would break the strict BARE syntax)
 
 # Policy format
 
