@@ -535,7 +535,7 @@ enum spic_result spic_verify(
 		if (spic_ed25519_verify(&policy_witness_pubkeys[32*key_index], sig, p2-20, p - (p2-20)) < 0)
 			return SPIC_INVALID_COSIGNATURE;
 
-		witness_word |= 1<<key_index;
+		witness_word |= (uint64_t)1 << key_index;
 	}
 
 	uint32_t bytecode_len;
