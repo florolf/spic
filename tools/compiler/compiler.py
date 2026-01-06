@@ -503,7 +503,6 @@ class SpicPolicy:
 
     def _compile_proof(self, proof: SigsumProof, leaf_keys: list[bytes], optimize: bool = True, check_quorum: bool = True) -> SpicProof:
         cosignatures = []
-        ts_last = 0
 
         # sort first by timestamp for delta compression and then by keyhash to define a deterministic order
         for ts, keyhash, signature in sorted(proof.cosignatures, key=lambda cs: (cs[0], cs[1])):
@@ -512,14 +511,19 @@ class SpicPolicy:
             except KeyError:
                 continue
 
-            cosignatures.append((ts - ts_last, *sig))
-            ts_last = ts
+            cosignatures.append((ts, *sig))
 
         if optimize:
             cosignatures = self._optimize_cosignatures(cosignatures)
         elif check_quorum:
             if not self._check_quorum(set([cs[1] for cs in cosignatures])):
                 raise RuntimeError("cosignatures don't satisfy quorum")
+
+        ts_last = 0
+        for i in range(0, len(cosignatures)):
+            ts, key_idx, signature = cosignatures[i]
+            cosignatures[i] = (ts - ts_last, key_idx, signature)
+            ts_last = ts
 
         return SpicProof(
             leaf_signature = self._sig_to_idx(leaf_keys, proof.leaf_sig),
