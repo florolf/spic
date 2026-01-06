@@ -493,26 +493,13 @@ class SpicPolicy:
         raise KeyError(f'could not find key for hash {hash_.hex()} in policy')
 
     def _optimize_cosignatures(self, cosignatures: list[tuple[int, int, bytes]]) -> list[tuple[int, int, bytes]]:
-        indexes = [idx for (_, idx, _) in cosignatures]
+        for i in range(0, len(cosignatures)+1):
+            for combination in itertools.combinations(cosignatures, i):
+                indexes = [idx for (_, idx, _) in combination]
+                if self._check_quorum(indexes):
+                    return list(combination)
 
-        if self._check_quorum([]):
-            return []
-
-        needed_cosignatures = None
-        for i in range(1, len(cosignatures)+1):
-            for combination in itertools.combinations(indexes, i):
-                if self._check_quorum(combination):
-                    needed_cosignatures = set(combination)
-                    break
-            else:
-                continue
-
-            break
-
-        if needed_cosignatures is None:
-            raise RuntimeError('could not find satisfying cosignature set')
-
-        return [cs for cs in cosignatures if cs[1] in needed_cosignatures]
+        raise RuntimeError('could not find satisfying cosignature set')
 
     def _compile_proof(self, proof: SigsumProof, leaf_keys: list[bytes], optimize: bool = True, check_quorum: bool = True) -> SpicProof:
         cosignatures = []
