@@ -127,16 +127,17 @@ static inline uint8_t b64c(uint8_t v)
 
 SPIC_STATIC void b64_32(uint8_t out[static 45], const uint8_t in[static 32])
 {
-	for (size_t i = 0; i < 11; i++) {
+	for (size_t i = 0; ; i++) {
 		*out++ = b64c((in[0] >> 2) & 0x3F);
 		*out++ = b64c(((in[0] & 0x03) << 4) | ((in[1] >> 4) & 0x0F));
 
-		if (i != 10) {
-			*out++ = b64c(((in[1] & 0x0F) << 2) | ((in[2] >> 6) & 0x03));
-			*out++ = b64c(in[2] & 0x3F);
-		} else {
+		if (i == 10) {
 			*out++ = b64c((in[1] & 0x0F) << 2);
+			break;
 		}
+
+		*out++ = b64c(((in[1] & 0x0F) << 2) | ((in[2] >> 6) & 0x03));
+		*out++ = b64c(in[2] & 0x3F);
 
 		in += 3;
 	}
