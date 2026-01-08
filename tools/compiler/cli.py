@@ -47,7 +47,7 @@ def do_dump_policy(args):
 def do_proof(args):
     policy = compiler.SpicPolicy.from_bytes(args.policy.read_bytes())
 
-    proof_txt = read_blob(args.input).decode()
+    proof_txt = read_blob(args.proof).decode()
     proof = compiler.SigsumProof.from_ascii(proof_txt)
 
     leaf_keys = []
