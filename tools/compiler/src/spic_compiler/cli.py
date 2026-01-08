@@ -7,10 +7,10 @@
 import argparse
 import sys
 
-import compiler
-
 from pathlib import Path
 from typing import Optional
+
+from . import compiler
 
 def write_blob(target: Optional[str], blob: bytes):
     if target is None or target == '-':

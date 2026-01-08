@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from typing import Self, Optional, Iterable
 
-import bare
+from . import bare
 
 __all__ = ['SigsumProof', 'SpicProof', 'SigsumPolicy', 'SpicPolicy']
 

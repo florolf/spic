@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Florian Larysch <fl@n621.de>
+#
+# SPDX-License-Identifier: BSD-2-Clause-Patent OR CC0-1.0
+
+[project]
+name = "spic-compiler"
+description = ""
+license = "BSD-2-Clause-Patent OR CC0-1.0"
+authors = [
+    { name = "Florian Larysch", email = "fl@n621.de" }
+]
+version = "0.0.1"
+requires-python = ">=3.11"
+
+[project.scripts]
+spic-compiler = "spic_compiler.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
