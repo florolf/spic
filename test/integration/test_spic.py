@@ -15,10 +15,9 @@ from typing import Any, Optional
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / 'tools' / 'compiler'))
 sys.path.insert(0, str(ROOT / 'test' / 'tools'))
 
-import compiler
+from spic_compiler import compiler
 import test_utils
 
 def mkpolicy(policy: str) -> compiler.SigsumPolicy:
