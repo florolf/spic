@@ -445,14 +445,20 @@ enum spic_result spic_verify(
 	 * then can we place the origin line.
 	 */
 
-	/* After this, p points to the last digit of tree_size, p2 to the
+	/* Format tree_size. We first put it worst-case position and move it
+	 * forward to [124] in the next step after we actually know the length.
+	 * After this block, p points to the last digit of tree_size, p2 to the
 	 * first. The length of the formatted number is p-p2+1. */
 	uint8_t *p = &scratch[142];
 	uint8_t *p2 = encode_dec(p, tree_size);
+
+	/* Move the formatted value forward to [124]. p and p2 point to unused
+	 * memory after this, but p-p2+1 still corresponds to the length of the
+	 * number. */
 	memmove(&scratch[124], p2, p-p2+1);
 
-	/* Make p point to where the newline after tree_size should go
-	 * ([x+46]). */
+	/* Make p point to where the newline after tree_size should go ([x+1]).
+	 */
 	p = &scratch[124 + p-p2+1];
 	*p++ = '\n';
 
