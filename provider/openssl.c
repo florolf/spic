@@ -53,27 +53,12 @@ out:
 	return ret;
 }
 
-void spic_sha256_reset(void)
+void spic_sha256(uint8_t *out, const uint8_t *in, size_t inlen)
 {
 	if (!sha256_evp_ctx)
 		sha256_evp_ctx = EVP_MD_CTX_new();
 
 	EVP_DigestInit_ex(sha256_evp_ctx, EVP_sha256(), NULL);
-}
-
-void spic_sha256_update(const uint8_t *in, size_t inlen)
-{
 	EVP_DigestUpdate(sha256_evp_ctx, in, inlen);
-}
-
-void spic_sha256_finish(uint8_t *out)
-{
 	EVP_DigestFinal_ex(sha256_evp_ctx, out, NULL);
-}
-
-void spic_sha256(uint8_t *out, const uint8_t *in, size_t inlen)
-{
-	spic_sha256_reset();
-	spic_sha256_update(in, inlen);
-	spic_sha256_finish(out);
 }

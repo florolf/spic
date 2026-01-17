@@ -13,6 +13,9 @@
 #include <errno.h>
 #include <getopt.h>
 
+#include <openssl/evp.h>
+#include <openssl/err.h>
+
 #include "spic.h"
 
 static uint8_t *slurp(const char *file, size_t *size_out)
@@ -163,7 +166,10 @@ int main(int argc, char **argv)
 
 	uint8_t hash[32];
 	if (!raw_hash) {
-		spic_sha256_reset();
+		static EVP_MD_CTX *sha256_evp_ctx;
+		sha256_evp_ctx = EVP_MD_CTX_new();
+
+		EVP_DigestInit_ex(sha256_evp_ctx, EVP_sha256(), NULL);
 
 		uint8_t buf[BUFSIZ];
 		ssize_t bytes_read;
@@ -174,13 +180,15 @@ int main(int argc, char **argv)
 					continue;
 
 				perror("read");
+				EVP_MD_CTX_free(sha256_evp_ctx);
 				goto out;
 			} else if (bytes_read == 0) {
-				spic_sha256_finish(hash);
+				EVP_DigestFinal_ex(sha256_evp_ctx, hash, NULL);
+				EVP_MD_CTX_free(sha256_evp_ctx);
 				break;
 			}
 
-			spic_sha256_update(buf, bytes_read);
+			EVP_DigestUpdate(sha256_evp_ctx, buf, bytes_read);
 		}
 	} else {
 		uint8_t buf[BUFSIZ];
