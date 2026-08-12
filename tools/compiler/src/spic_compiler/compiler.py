@@ -450,7 +450,7 @@ class SpicPolicy:
             lines.append(line)
 
         if stack_size != 1:
-            lines.append('invalid stack size at end of program: {stack_size} != 1')
+            lines.append(f'invalid stack size at end of program: {stack_size} != 1')
 
         return '\n'.join(lines)
 
